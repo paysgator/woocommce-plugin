@@ -28,12 +28,12 @@ function paysgator_init_gateway() {
 		return;
 	}
 
-	require_once PAYSGATOR_PLUGIN_DIR . 'includes/class-paysgator-api.php';
-	require_once PAYSGATOR_PLUGIN_DIR . 'includes/class-wc-gateway-paysgator.php';
+require_once PAYSGATOR_PLUGIN_DIR . 'includes/class-paysgator-api.php'; if (!class_exists('Paysgator_API')) { throw new Exception('Paysgator_API class not found'); }
+require_once PAYSGATOR_PLUGIN_DIR . 'includes/class-wc-gateway-paysgator.php'; if (!class_exists('WC_Gateway_Paysgator')) { throw new Exception('WC_Gateway_Paysgator class not found'); }
 	
 	// Register Blocks Support
-    require_once PAYSGATOR_PLUGIN_DIR . 'includes/class-paysgator-blocks-support.php';
-    add_action( 'woocommerce_blocks_loaded', 'paysgator_register_order_blocks_support' );
+require_once PAYSGATOR_PLUGIN_DIR . 'includes/class-paysgator-blocks-support.php'; if (!class_exists('Paysgator_Gateway_Blocks_Support')) { throw new Exception('Paysgator_Gateway_Blocks_Support class not found'); }
+add_action( 'woocommerce_blocks_loaded', function() { try { paysgator_register_order_blocks_support(); } catch (Exception $e) { error_log('Error registering Paysgator blocks support: ' . $e->getMessage()); } } );
 }
 add_action( 'plugins_loaded', 'paysgator_init_gateway' );
 
