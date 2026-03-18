@@ -84,9 +84,9 @@ class WC_Gateway_Paysgator extends WC_Payment_Gateway {
 		$return_url = $this->get_return_url( $order );
 
 		// Generate safe, unique, and max 15-char externalTransactionId
-		// Using a combination of order ID and a short unique hash
+		// Using order ID with wp_unique_id for atomic uniqueness
 		$order_id_part = substr( (string) $order->get_id(), -5 ); // last 5 digits
-		$unique_part   = substr( base_convert( microtime( true ) * 100, 10, 36 ), -9 ); // unique suffix
+		$unique_part   = substr( wp_unique_id( '', true ), -9 ); // atomic unique suffix
 		$external_id   = substr( $order_id_part . $unique_part, 0, 15 );
 
 		// Store this specific external ID for reconciliation
@@ -156,45 +156,66 @@ class WC_Gateway_Paysgator extends WC_Payment_Gateway {
 	        exit( 'Bad Request' );
 	    }
 	    
-	    if ( 'payment.success' === $data['type'] ) {
-	        $payment_content = isset( $data['data'] ) ? $data['data'] : array();
+	    // Validate webhook payload structure
+	    if ( ! isset( $data['data'] ) || ! is_array( $data['data'] ) ) {
+	        status_header( 400 );
+	        exit( 'Bad Request' );
+	    }
+	    
+	    $payment_content = $data['data'];
+	    
+	    // Try to find order by externalTransactionId if provided in webhook, 
+	    // or by matching transactionId stored in meta.
+	    $external_id    = isset( $payment_content['externalTransactionId'] ) ? $payment_content['externalTransactionId'] : '';
+	    $transaction_id = isset( $payment_content['transactionId'] ) ? $payment_content['transactionId'] : '';
+	    
+	    $order = null;
+	    
+	    if ( ! empty( $external_id ) ) {
+	        // Search for order by the stored external ID
+	        $orders = wc_get_orders( array(
+	            'meta_key'   => '_paysgator_external_id',
+	            'meta_value' => $external_id,
+	            'limit'      => 1,
+	        ) );
 	        
-	        // Try to find order by externalTransactionId if provided in webhook, 
-	        // or by matching transactionId stored in meta.
-	        $external_id    = isset( $payment_content['externalTransactionId'] ) ? $payment_content['externalTransactionId'] : '';
-	        $transaction_id = isset( $payment_content['transactionId'] ) ? $payment_content['transactionId'] : '';
-	        
-	        $order = null;
-	        
-	        if ( ! empty( $external_id ) ) {
-	            // Search for order by the stored external ID
-	            $orders = wc_get_orders( array(
-	                'meta_key'   => '_paysgator_external_id',
-	                'meta_value' => $external_id,
-	                'limit'      => 1,
-	            ) );
-	            
-	            if ( ! empty( $orders ) ) {
-	                $order = $orders[0];
-	            }
+	        if ( ! empty( $orders ) ) {
+	            $order = $orders[0];
 	        }
-	        
-	        if ( ! $order && ! empty( $transaction_id ) ) {
-	             $orders = wc_get_orders( array(
-	                 'meta_key'   => '_paysgator_transaction_id',
-	                 'meta_value' => $transaction_id,
-	             ) );
-	             if ( ! empty( $orders ) ) {
-	                 $order = $orders[0];
-	             }
-	        }
-	        
-	        if ( $order ) {
+	    }
+	    
+	    if ( ! $order && ! empty( $transaction_id ) ) {
+	         $orders = wc_get_orders( array(
+	             'meta_key'   => '_paysgator_transaction_id',
+	             'meta_value' => $transaction_id,
+	         ) );
+	         if ( ! empty( $orders ) ) {
+	             $order = $orders[0];
+	         }
+	    }
+	    
+	    if ( ! $order ) {
+	        status_header( 404 );
+	        exit( 'Order Not Found' );
+	    }
+	    
+	    // Handle different webhook event types
+	    switch ( $data['type'] ) {
+	        case 'payment.success':
 	            $order->payment_complete( $transaction_id );
 	            $order->add_order_note( sprintf( __( 'Paysgator payment successful. Transaction ID: %s', 'paysgator-woocommerce-payment' ), $transaction_id ) );
-	        }
-        }
-        
+	            break;
+	        case 'payment.failed':
+	            $order->update_status( 'failed', sprintf( __( 'Paysgator payment failed. Transaction ID: %s', 'paysgator-woocommerce-payment' ), $transaction_id ) );
+	            break;
+	        case 'payment.refunded':
+	            $order->update_status( 'refunded', sprintf( __( 'Paysgator payment refunded. Transaction ID: %s', 'paysgator-woocommerce-payment' ), $transaction_id ) );
+	            break;
+	        default:
+	            // Log unknown event type but still acknowledge
+	            $order->add_order_note( sprintf( __( 'Paysgator webhook received: %s. Transaction ID: %s', 'paysgator-woocommerce-payment' ), $data['type'], $transaction_id ) );
+	            break;
+	    }
 	    status_header( 200 );
 	    exit( 'OK' );
 	}
